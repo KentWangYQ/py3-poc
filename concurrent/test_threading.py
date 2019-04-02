@@ -72,38 +72,63 @@ class EventConditionTest(unittest.TestCase):
                 self._cv = threading.Condition()
 
             def start(self):
-                thread = threading.Thread(target=self.run)
-                thread.daemon = True
+                thread = threading.Thread(target=self.run, daemon=True)
                 thread.start()
 
             def run(self):
+                """
+                Producer
+                :return:
+                """
                 while True:
                     time.sleep(self._interval)
                     with self._cv:
                         self._flag ^= 1
                         self._cv.notify_all()
 
-            def wait_for_tick(self):
+            def wait(self):
+                """
+                Consumer
+                :return:
+                """
                 with self._cv:
-                    last_flag = self._flag
-                    while last_flag == self._flag:
+                    flag = self._flag
+                    while flag == self._flag:
                         self._cv.wait()
 
         p_timer = PeriodicTimer(1)
         p_timer.start()
 
-        def count_down(n_ticks):
-            while n_ticks > 0:
-                p_timer.wait_for_tick()
-                print('T-minus', n_ticks)
-                n_ticks -= 1
+        def count_down(n):
+            while n > 0:
+                p_timer.wait()
+                print('T-minus', n)
+                n -= 1
 
         def count_up(last):
             n = 0
             while n < last:
-                p_timer.wait_for_tick()
+                p_timer.wait()
                 print('counting', n)
                 n += 1
 
         threading.Thread(target=count_down, args=(10,)).start()
         threading.Thread(target=count_up, args=(5,)).start()
+
+    def test_semaphore(self):
+        import threading
+        import time
+
+        def worker(n, semaphore: threading.Semaphore):
+            semaphore.acquire()
+            print('Working', n)
+
+        semaphore = threading.Semaphore(0)
+        n_workers = 5
+        for n in range(n_workers):
+            thread = threading.Thread(target=worker, args=(n, semaphore,))
+            thread.start()
+
+        for n in range(n_workers):
+            time.sleep(1)
+            semaphore.release()
