@@ -523,6 +523,7 @@ class NoDeadLockTest(unittest.TestCase):
         五位哲学家围坐就餐，没人面前只有一只筷子，拿到两只筷子才能吃饭。
         :return:
         """
+
         def philosopher(left, right):
             with self.acquire(left, right):
                 print(threading.currentThread(), 'eating')
@@ -532,3 +533,60 @@ class NoDeadLockTest(unittest.TestCase):
 
         for n in range(NSTICKS):
             threading.Thread(target=philosopher, args=(chopsticks[n], chopsticks[(n + 1) % NSTICKS])).start()
+
+
+from socket import socket, AF_INET, SOCK_STREAM
+from functools import partial
+
+
+class LocalStorageTest(unittest.TestCase):
+    class LazyConnection:
+        """
+        可用于多线程的LazyConnection上下文管理类
+        1. threading.local()创建一个本地线程存储对象。
+        2. 该对象的属性的保存和读取操作都只会对执行线程可见，其他线程不可见。
+        """
+
+        def __init__(self, address, family=AF_INET, type=SOCK_STREAM):
+            self._address = address
+            self._family = family
+            self._type = type
+            self._local = threading.local()
+
+        def __enter__(self):
+            if hasattr(self._local, 'sock'):
+                raise RuntimeError('Already connected')
+            self._local.sock = socket(family=self._family, type=self._type)
+            self._local.sock.connect(self._address)
+            return self._local.sock
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self._local.sock.close()
+            del self._local.sock
+
+    def test_local(self):
+        """
+        使用LazyConnection进行多线程请求操作
+        1. 每个线程会创建属于自己的专属套接字连接，并存储为local.sock。
+        2. 不同线程操作的是不同的套接字，因此不会相互影响。
+        :return:
+        """
+        def t(host, conn):
+            with conn as s:
+                s.send(b'GET / HTTP/1.0\r\n')
+                s.send(b'Host: %s\r\n' % host)
+                s.send(b'\r\n')
+                resp = b''.join(iter(partial(s.recv, 8192), b''))
+
+            print('Got %d bytes' % len(resp))
+
+        host1 = b'www.python.org'
+        host2 = b'www.bing.com'
+        conn1 = self.LazyConnection((host1, 80))
+        conn2 = self.LazyConnection((host2, 80))
+        t1 = threading.Thread(target=t, args=(host1, conn1,))
+        t2 = threading.Thread(target=t, args=(host2, conn2,))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
