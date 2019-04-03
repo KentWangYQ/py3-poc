@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 
 import unittest
+import threading
+import time
 
 
 class ThreadStartTest(unittest.TestCase):
     @staticmethod
     def count_down(n):
-        import time
         while n > 0:
             print('T-minus', n)
             n -= 1
@@ -43,7 +44,6 @@ class EventConditionTest(unittest.TestCase):
         started_event = Event()
 
         def count_down(n):
-            import time
             print('count_down starting')
             started_event.set()
 
@@ -62,9 +62,6 @@ class EventConditionTest(unittest.TestCase):
         thread.join()
 
     def test_condition(self):
-        import threading
-        import time
-
         class PeriodicTimer:
             def __init__(self, interval):
                 self._interval = interval
@@ -116,9 +113,6 @@ class EventConditionTest(unittest.TestCase):
         threading.Thread(target=count_up, args=(5,)).start()
 
     def test_semaphore(self):
-        import threading
-        import time
-
         def worker(n, semaphore: threading.Semaphore):
             semaphore.acquire()
             print('Working', n)
@@ -151,7 +145,6 @@ class CommunicationTest(unittest.TestCase):
             4. q.qsize(), q.full(), q.empty()实用方法获取队列的状态，但是非线程安全。
         :return:
         """
-        import time
         from threading import Thread
         from queue import Queue
 
@@ -187,7 +180,6 @@ class CommunicationTest(unittest.TestCase):
         2. Queue提供基本的完成特性，task_done()和join()。
         :return:
         """
-        import time
         from queue import Queue
         from threading import Thread
 
@@ -226,7 +218,6 @@ class CommunicationTest(unittest.TestCase):
         1. 消费者线程处理完特定的数据项时立即得到通知，可以将一个Event和数据放在一起。
         :return:
         """
-        import time
         from queue import Queue
         from threading import Thread, Event
 
@@ -265,9 +256,7 @@ class CommunicationTest(unittest.TestCase):
         2. 最常见的方式就是使用Condition来包装我们的数据结果。
         :return:
         """
-        import time
         import heapq
-        import threading
 
         class PriorityQueue:
             def __init__(self):
@@ -325,7 +314,6 @@ class LockTest(unittest.TestCase):
         4. 为了避免死锁，最好一个线程一次只获取一个锁，如果做不到，则需要使用高级锁。高级锁一般用于一些特殊情况。
         :return:
         """
-        import time
         from threading import Lock, Thread
 
         class ShareCounter:
@@ -371,7 +359,6 @@ class LockTest(unittest.TestCase):
         7. 缺点是大量线程频繁更新计数器时会有争用锁的问题。
         :return:
         """
-        import time
         from threading import RLock, Thread
 
         class ShareCounter:
@@ -417,7 +404,6 @@ class LockTest(unittest.TestCase):
         5. 信号量更适用于需要在线程之间引入信号或限制的程序。比如，限制一段代码的并发量。
         :return:
         """
-        import time
         from threading import Semaphore, Thread
 
         def url_open(url):
@@ -433,3 +419,116 @@ class LockTest(unittest.TestCase):
 
         for i in range(10):
             Thread(target=fetch_url, args=('url%d' % i,)).start()
+
+
+class NoDeadLockTest(unittest.TestCase):
+    """
+    避免死锁
+    1. 尽可能保证每一个线程只能同时保持一个锁，这样程序就不会死锁。
+    2. 死锁的检测和恢复几乎没有优雅的解决方案，常见的两种方式：
+        1. watchdog timer(看门狗计数器): 正常线程运行时每隔一段时间重置计数器，一旦发生死锁，则无法重置计数器，导致计数器超时，这是程序通过重启恢复。
+        2. 进程获取锁的时候严格按照对象id升序排列获取。数学证明，可以保证不出现死锁。
+    """
+    from contextlib import contextmanager
+
+    _local = threading.local()
+
+    @contextmanager
+    def acquire(self, *locks):
+        """
+        同时获取多个锁，保证顺序获取，防止死锁
+        1. 为每个锁分配一个唯一ID，只允许按照升序规则来使用多个锁。
+        2. 该规则使用上下文管理器非常容易实现。
+        3. 无论是使用单个锁还是多个锁，都使用acquire函数来申请锁。
+        4. 即便在不同的函数中使用不同的顺序获取锁也不会发生死锁，关键在于我们对锁进行了排序。通过排序，不管什么顺序请求，都会按照固定的顺序被获取。
+        5. 如果多个acquire操作被嵌套调用，可以通过线程本地存储(TLS)来检测潜在的死锁问题。
+        :return:
+        """
+        locks = sorted(locks, key=lambda x: id(x))
+
+        acquired = getattr(self._local, 'acquired', [])  # type:list
+
+        if acquired and max([id(lock) for lock in locks]) >= id(locks[0]):
+            raise RuntimeError('Lock order Violation')
+
+        acquired.extend(locks)
+
+        self._local.acquired = acquired
+
+        try:
+            for lock in locks:
+                lock.acquire()
+            yield
+        finally:
+            for lock in reversed(locks):
+                lock.release()
+            del acquired[-len(locks):]
+
+    def test_ordered_lock(self):
+        """
+        不同的函数中使用不同的顺序获取锁也不会发生死锁
+        1. 即便在不同的函数中使用不同的顺序获取锁也不会发生死锁，关键在于我们对锁进行了排序。通过排序，不管什么顺序请求，都会按照固定的顺序被获取。
+        :return:
+        """
+        x_lock = threading.Lock()
+        y_lock = threading.Lock()
+
+        def thread_1():
+            for i in range(10):
+                with self.acquire(x_lock, y_lock):
+                    print('Thread-1')
+
+        def thread_2():
+            for i in range(10):
+                with self.acquire(y_lock, x_lock):
+                    print('Thread-2')
+
+        threading.Thread(target=thread_1, daemon=True).start()
+        threading.Thread(target=thread_2, daemon=True).start()
+
+    def test_nested_acquire(self):
+        """
+        多个acquire操作被嵌套调用
+        1. 如果多个acquire操作被嵌套调用，可以通过线程本地存储(TLS)来检测潜在的死锁问题。
+        :return:
+        """
+        x_lock = threading.Lock()
+        y_lock = threading.Lock()
+
+        def thread_1():
+            try:
+                while True:
+                    with self.acquire(x_lock):
+                        with self.acquire(y_lock):
+                            print('Thread-1')
+            except RuntimeError as err:
+                print(err)
+
+        def thread_2():
+            try:
+                while True:
+                    with self.acquire(y_lock):
+                        with self.acquire(x_lock):
+                            print('Thread-2')
+            except RuntimeError as err:
+                print(err)
+
+        threading.Thread(target=thread_1, daemon=True).start()
+        threading.Thread(target=thread_2, daemon=True).start()
+        time.sleep(1)
+
+    def test_philosopher(self):
+        """
+        哲学家就餐问题
+        五位哲学家围坐就餐，没人面前只有一只筷子，拿到两只筷子才能吃饭。
+        :return:
+        """
+        def philosopher(left, right):
+            with self.acquire(left, right):
+                print(threading.currentThread(), 'eating')
+
+        NSTICKS = 5
+        chopsticks = [threading.Lock() for _ in range(NSTICKS)]
+
+        for n in range(NSTICKS):
+            threading.Thread(target=philosopher, args=(chopsticks[n], chopsticks[(n + 1) % NSTICKS])).start()
