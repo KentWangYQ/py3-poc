@@ -312,3 +312,124 @@ class CommunicationTest(unittest.TestCase):
 
         threading.Thread(target=producer, args=(pq,)).start()
         threading.Thread(target=consumer, args=(pq,)).start()
+
+
+class LockTest(unittest.TestCase):
+    def test_lock(self):
+        """
+        在多线程中的临界区加锁避免资源竞争
+        1. Lock对象和with语句保证互斥执行。
+        2. 线程调度本质上会不确定的，因此在多线程程序中错误的使用锁机制可能会导致随机数据损坏或其他异常行为。
+            我们称之为竞争条件。最好只在临界区使用锁。
+        3. 相比于显示调用锁获取释放，with语句更加优雅。
+        4. 为了避免死锁，最好一个线程一次只获取一个锁，如果做不到，则需要使用高级锁。高级锁一般用于一些特殊情况。
+        :return:
+        """
+        import time
+        from threading import Lock, Thread
+
+        class ShareCounter:
+            def __init__(self, init_value=0):
+                self._value = init_value
+                self._lock = Lock()
+
+            def incr(self, delta=1):
+                with self._lock:
+                    time.sleep(0.5)
+                    self._value += delta
+                    print('i', self._value)
+
+            def decr(self, delta=1):
+                with self._lock:
+                    time.sleep(0.5)
+                    self._value -= delta
+                    print('d', self._value)
+
+        def incr(sc: ShareCounter):
+            for i in range(8):
+                sc.incr()
+
+        def decr(sc: ShareCounter):
+            for i in range(5):
+                sc.decr()
+
+        sc = ShareCounter()
+        t1 = Thread(target=incr, args=(sc,))
+        t2 = Thread(target=decr, args=(sc,))
+        t1.start()
+        t2.start()
+
+    def test_rlock(self):
+        """
+        RLock(可重入锁，递归锁)，可以被一个线程多次获取
+        1. 主要用于实现基于监测对象模式的锁定和同步
+        2. 当锁被持有时，只有一个线程可以使用完整的函数和类中的方法。
+        3. 该用例中，没有对每个实例加锁，而是使用被所有实例共享的类级锁。
+        4. 这个锁用来同步类方法。具体的说就是，同时只有一个线程可以调用这个类的方法。
+        5. 如decr方法，已经持有该锁的方法在调用同样使用该锁的方法时，可以多次获取该锁，同时递归层级加一。
+        6. 特点是该类无论有多少个实例都只用一个锁，因此需要大量使用计数器的情况下内存效率很高。
+        7. 缺点是大量线程频繁更新计数器时会有争用锁的问题。
+        :return:
+        """
+        import time
+        from threading import RLock, Thread
+
+        class ShareCounter:
+            _lock = RLock()  # 类级锁
+
+            def __init__(self, init_value=0):
+                self._count = init_value
+
+            def incr(self, delta=1):
+                with ShareCounter._lock:
+                    time.sleep(0.5)
+                    self._count += delta
+                    print(self._count)
+
+            def decr(self, delta=1):
+                with ShareCounter._lock:
+                    self.incr(-delta)  # 持有锁时，调用需要锁的方法
+
+        def incr(sc, count):
+            for i in range(count):
+                sc.incr()
+
+        def decr(sc, count):
+            for i in range(count):
+                sc.decr()
+
+        sc1 = ShareCounter()
+        sc2 = ShareCounter()
+
+        t1 = Thread(target=incr, args=(sc1, 5,))
+        t2 = Thread(target=decr, args=(sc2, 5,))
+
+        t1.start()
+        t2.start()
+
+    def test_semaphore(self):
+        """
+        信号量限制并发
+        1. 信号量是建立在共享计数器基础上的同步原语。
+        2. 如果计数器不为0，with语句将计数器减一，程序允许执行。with语句结束，计数器加一。
+        3. 如果计数器为0，线程阻塞，直到其他线程结束计数器加一。
+        4. 信号量的复杂性影响性能，不建议像标准锁一样使用信号量来锁线程同步。
+        5. 信号量更适用于需要在线程之间引入信号或限制的程序。比如，限制一段代码的并发量。
+        :return:
+        """
+        import time
+        from threading import Semaphore, Thread
+
+        def url_open(url):
+            # 模拟请求url
+            time.sleep(1)
+            return 'request url done', url
+
+        _fetch_url_semaphore = Semaphore(3)
+
+        def fetch_url(url):
+            with _fetch_url_semaphore:
+                print(url_open(url))
+
+        for i in range(10):
+            Thread(target=fetch_url, args=('url%d' % i,)).start()
