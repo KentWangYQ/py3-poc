@@ -579,3 +579,65 @@ class LocalStorageTest(unittest.TestCase):
         t2.start()
         t1.join()
         t2.join()
+
+
+class ActorTest(unittest.TestCase):
+    class ActorExit(Exception):
+        pass
+
+    class Actor:
+        def __init__(self):
+            self._mail_box = Queue()
+            self._terminated = threading.Event()
+
+        def send(self, msg):
+            self._mail_box.put(msg)
+
+        def recv(self):
+            msg = self._mail_box.get()
+            if msg is ActorTest.ActorExit:
+                raise ActorTest.ActorExit
+            return msg
+
+        def close(self):
+            self.send(ActorTest.ActorExit)
+
+        def start(self):
+            threading.Thread(target=self._boot_strap, daemon=True).start()
+
+        def _boot_strap(self):
+            try:
+                self.run()
+            except ActorTest.ActorExit:
+                pass
+            finally:
+                self._terminated.set()
+
+        def join(self):
+            self._terminated.wait()
+
+        def run(self):
+            while True:
+                self.recv()
+
+    def test_actor(self):
+        a = ActorTest.Actor()
+        a.start()
+        a.send('Hello')
+        a.send('World')
+        a.close()
+        a.join()
+
+    class PrintActor(Actor):
+        def run(self):
+            while True:
+                msg = self.recv()
+                print('Got', msg)
+
+    def test_print_actor(self):
+        p = ActorTest.PrintActor()
+        p.start()
+        p.send('Hello')
+        p.send('World')
+        p.close()
+        p.join()
