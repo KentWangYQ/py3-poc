@@ -4,6 +4,10 @@ import unittest
 import threading
 import time
 
+from socket import socket, AF_INET, SOCK_STREAM
+from functools import partial
+from queue import Queue
+
 
 class ThreadStartTest(unittest.TestCase):
     @staticmethod
@@ -14,8 +18,7 @@ class ThreadStartTest(unittest.TestCase):
             time.sleep(1)
 
     def test_start_thread(self):
-        from threading import Thread
-        thread = Thread(target=self.count_down, args=(5,))
+        thread = threading.Thread(target=self.count_down, args=(5,))
         self.assertFalse(thread.is_alive())
         thread.start()
         self.assertTrue(thread.is_alive())
@@ -23,8 +26,7 @@ class ThreadStartTest(unittest.TestCase):
         thread.join()
 
     def test_daemon_thread(self):
-        from threading import Thread
-        thread = Thread(target=self.count_down, args=(5,), daemon=True)
+        thread = threading.Thread(target=self.count_down, args=(5,), daemon=True)
         self.assertFalse(thread.is_alive())
         thread.start()
         self.assertTrue(thread.is_alive())
@@ -40,8 +42,7 @@ class EventConditionTest(unittest.TestCase):
         :return:
         """
 
-        from threading import Event, Thread
-        started_event = Event()
+        started_event = threading.Event()
 
         def count_down(n):
             print('count_down starting')
@@ -52,7 +53,7 @@ class EventConditionTest(unittest.TestCase):
                 n -= 1
                 time.sleep(1)
 
-        thread = Thread(target=count_down, args=(5,))
+        thread = threading.Thread(target=count_down, args=(5,))
         self.assertFalse(thread.is_alive())
         thread.start()
         self.assertTrue(thread.is_alive())
@@ -145,8 +146,6 @@ class CommunicationTest(unittest.TestCase):
             4. q.qsize(), q.full(), q.empty()实用方法获取队列的状态，但是非线程安全。
         :return:
         """
-        from threading import Thread
-        from queue import Queue
 
         _sentinel = object()  # 关闭信号
 
@@ -170,8 +169,8 @@ class CommunicationTest(unittest.TestCase):
                     print('GET data', data)
 
         q = Queue()
-        Thread(target=producer, args=(q,)).start()
-        Thread(target=consumer, args=(q,)).start()
+        threading.Thread(target=producer, args=(q,)).start()
+        threading.Thread(target=consumer, args=(q,)).start()
 
     def test_queue_task_done_and_join(self):
         """
@@ -180,8 +179,6 @@ class CommunicationTest(unittest.TestCase):
         2. Queue提供基本的完成特性，task_done()和join()。
         :return:
         """
-        from queue import Queue
-        from threading import Thread
 
         _sentinel = object()  # 关闭信号
 
@@ -207,8 +204,8 @@ class CommunicationTest(unittest.TestCase):
 
         q = Queue()
 
-        Thread(target=producer, args=(q,)).start()
-        Thread(target=consumer, args=(q,)).start()
+        threading.Thread(target=producer, args=(q,)).start()
+        threading.Thread(target=consumer, args=(q,)).start()
 
         q.join()  # 等待Queue中所有消息处理完成
 
@@ -218,14 +215,12 @@ class CommunicationTest(unittest.TestCase):
         1. 消费者线程处理完特定的数据项时立即得到通知，可以将一个Event和数据放在一起。
         :return:
         """
-        from queue import Queue
-        from threading import Thread, Event
 
         _sentinel = object()
 
         def producer(q: Queue):
             for i in range(5):
-                evt = Event()
+                evt = threading.Event()
                 q.put((i, evt))
                 print('PUT', i)
                 evt.wait()
@@ -246,8 +241,8 @@ class CommunicationTest(unittest.TestCase):
 
         q = Queue()
 
-        Thread(target=producer, args=(q,)).start()
-        Thread(target=consumer, args=(q,)).start()
+        threading.Thread(target=producer, args=(q,)).start()
+        threading.Thread(target=consumer, args=(q,)).start()
 
     def test_Condition(self):
         """
@@ -314,12 +309,11 @@ class LockTest(unittest.TestCase):
         4. 为了避免死锁，最好一个线程一次只获取一个锁，如果做不到，则需要使用高级锁。高级锁一般用于一些特殊情况。
         :return:
         """
-        from threading import Lock, Thread
 
         class ShareCounter:
             def __init__(self, init_value=0):
                 self._value = init_value
-                self._lock = Lock()
+                self._lock = threading.Lock()
 
             def incr(self, delta=1):
                 with self._lock:
@@ -342,8 +336,8 @@ class LockTest(unittest.TestCase):
                 sc.decr()
 
         sc = ShareCounter()
-        t1 = Thread(target=incr, args=(sc,))
-        t2 = Thread(target=decr, args=(sc,))
+        t1 = threading.Thread(target=incr, args=(sc,))
+        t2 = threading.Thread(target=decr, args=(sc,))
         t1.start()
         t2.start()
 
@@ -359,10 +353,9 @@ class LockTest(unittest.TestCase):
         7. 缺点是大量线程频繁更新计数器时会有争用锁的问题。
         :return:
         """
-        from threading import RLock, Thread
 
         class ShareCounter:
-            _lock = RLock()  # 类级锁
+            _lock = threading.RLock()  # 类级锁
 
             def __init__(self, init_value=0):
                 self._count = init_value
@@ -388,8 +381,8 @@ class LockTest(unittest.TestCase):
         sc1 = ShareCounter()
         sc2 = ShareCounter()
 
-        t1 = Thread(target=incr, args=(sc1, 5,))
-        t2 = Thread(target=decr, args=(sc2, 5,))
+        t1 = threading.Thread(target=incr, args=(sc1, 5,))
+        t2 = threading.Thread(target=decr, args=(sc2, 5,))
 
         t1.start()
         t2.start()
@@ -404,21 +397,20 @@ class LockTest(unittest.TestCase):
         5. 信号量更适用于需要在线程之间引入信号或限制的程序。比如，限制一段代码的并发量。
         :return:
         """
-        from threading import Semaphore, Thread
 
         def url_open(url):
             # 模拟请求url
             time.sleep(1)
             return 'request url done', url
 
-        _fetch_url_semaphore = Semaphore(3)
+        _fetch_url_semaphore = threading.Semaphore(3)
 
         def fetch_url(url):
             with _fetch_url_semaphore:
                 print(url_open(url))
 
         for i in range(10):
-            Thread(target=fetch_url, args=('url%d' % i,)).start()
+            threading.Thread(target=fetch_url, args=('url%d' % i,)).start()
 
 
 class NoDeadLockTest(unittest.TestCase):
@@ -535,10 +527,6 @@ class NoDeadLockTest(unittest.TestCase):
             threading.Thread(target=philosopher, args=(chopsticks[n], chopsticks[(n + 1) % NSTICKS])).start()
 
 
-from socket import socket, AF_INET, SOCK_STREAM
-from functools import partial
-
-
 class LocalStorageTest(unittest.TestCase):
     class LazyConnection:
         """
@@ -571,6 +559,7 @@ class LocalStorageTest(unittest.TestCase):
         2. 不同线程操作的是不同的套接字，因此不会相互影响。
         :return:
         """
+
         def t(host, conn):
             with conn as s:
                 s.send(b'GET / HTTP/1.0\r\n')
