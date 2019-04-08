@@ -7,6 +7,8 @@ import time
 from socket import socket, AF_INET, SOCK_STREAM
 from functools import partial
 from queue import Queue
+from collections import defaultdict
+from contextlib import contextmanager
 
 
 class ThreadStartTest(unittest.TestCase):
@@ -582,30 +584,53 @@ class LocalStorageTest(unittest.TestCase):
 
 
 class ActorTest(unittest.TestCase):
+    """
+    actor模式
+    1. actor模式是一种最古老的也是最简单的并行和分布式计算解决方案。
+    2. 其天生的简单性是它如此受欢迎的原因之一。
+    3. 简单来讲，一个actor就是一个并发执行的任务，只是简单的执行发送给它的消息任务。
+    4. 响应消息时，actor还可以给其他actor发送进一步的消息。
+    5. actor之间的通信是单向和异步的。因此，消息发送者不知道消息是什么时候被发送的，也不会接收到一个消息处理之后回应或通知。
+    6. “发送”一个任务消息的概念可以被扩展到多进程甚至大型分布式系统中去。
+        例如，一个类actor对象的send()方法可以编程为让它能在一个套接字连接上传输数据或通过某些消息中间件来发送。
+    """
+
     class ActorExit(Exception):
+        """
+        哨兵，用来关闭actor
+        """
         pass
 
     class Actor:
+        """
+        actor实现
+        1. 如果放宽对于同步和异步消息发送的要求，该类也可以使用生成器来简化定义。
+        """
+
         def __init__(self):
             self._mail_box = Queue()
             self._terminated = threading.Event()
 
         def send(self, msg):
+            # 通过该actor发送消息
             self._mail_box.put(msg)
 
         def recv(self):
             msg = self._mail_box.get()
-            if msg is ActorTest.ActorExit:
+            if msg is ActorTest.ActorExit:  # 如果接收到哨兵，则关闭该actor
                 raise ActorTest.ActorExit
             return msg
 
         def close(self):
+            # 通过向队列发送哨兵的方式安全的关闭actor
             self.send(ActorTest.ActorExit)
 
         def start(self):
+            # 在一个内部线程中处理消息
             threading.Thread(target=self._boot_strap, daemon=True).start()
 
         def _boot_strap(self):
+            # 引导
             try:
                 self.run()
             except ActorTest.ActorExit:
@@ -641,3 +666,158 @@ class ActorTest(unittest.TestCase):
         p.send('World')
         p.close()
         p.join()
+
+    class Result:
+        """
+        结果对象，用于在actor中返回结果
+        """
+        def __init__(self):
+            self._evt = threading.Event()
+            self._result = None
+
+        def set_result(self, value):
+            self._result = value
+            self._evt.set()
+
+        def result(self):
+            self._evt.wait()
+            return self._result
+
+    class Worker(Actor):
+        """
+        actor允许在一个工作者中运行任意的函数，并通过一个特殊的Result对象返回结果
+        """
+        def submit(self, func, *args, **kwargs):
+            r = ActorTest.Result()
+            self.send((func, args, kwargs, r))
+            return r
+
+        def run(self):
+            while True:
+                func, args, kwargs, r = self.recv()
+                r.set_result(func(*args, **kwargs))
+
+    def test_worker(self):
+        worker = ActorTest.Worker()
+        worker.start()
+        r = worker.submit(pow, 2, 3)
+        print(r.result())
+
+
+class ExchangeTest(unittest.TestCase):
+    """
+    消息发布/订阅模型
+    1. 要实现发布/订阅的消息通信模式，通常需要引入一个单独的“交换机”或“网关”对象作为所有消息的中介。
+    2. 不直接将消息从一个任务发送到另一个，而是将其发送给交换机，然后再由交换机将它发送给一个或多个被关联的任务。
+    3. 一个交换机就是一个普通的对象，负责维护一个活跃的订阅者集合，并为绑定、解绑和发送消息提供响应的方法。
+    4. 尽管有很多变种，不过万变不离其宗。消息会发送给一个交换机，然后交换机会将他们发送给被绑定的订阅者。
+    5. 通过队列发送消息的任务或线程的模式很容易被实现并且也非常普遍。不过，使用发布/订阅模式的好处更加明显：
+        1. 使用一个交换机可以简化大部分涉及到线程通信的工作。类似于日志模块的工作原理。
+        2. 交换机广播消息给多个订阅者的能力带来了一个全新的通信模式。例如，可以使用多任务系统、广播或扇出。
+        3. 兼容多种"task-like"对象。如actor、协程、网络连接或任何实现了正确send()方法的对象。
+    6. 关于交换机的思想有很多中的扩展实现。例如，交换机可以实现一整个消息通道集合或提供交换机名称的模式匹配规则。
+    7. 交换机可以扩展到分布式计算程序中，比如将消息路由到不同机器上面的任务中去。
+    """
+
+    class Exchange:
+        """
+        交换机实现
+        """
+
+        def __init__(self):
+            self._subscribers = set()
+
+        def attach(self, task):
+            self._subscribers.add(task)
+
+        def detach(self, task):
+            self._subscribers.remove(task)
+
+        @contextmanager
+        def subscribe(self, *tasks):
+            """
+            使用上下文管理器，避免出现忘记detach的情况
+            :param tasks:
+            :return:
+            """
+            for task in tasks:
+                self.attach(task)
+            try:
+                yield
+            finally:
+                for task in tasks:
+                    self.detach(task)
+
+        def send(self, msg):
+            for subscriber in self._subscribers:
+                subscriber.send(msg)
+
+    # 使用dict管理交换机
+    _exchanges = defaultdict(Exchange)
+
+    @staticmethod
+    def get_exchange(name):
+        """
+        通过name获取交换机
+        :param name:
+        :return:
+        """
+        return ExchangeTest._exchanges[name]
+
+    class Task:
+        """
+        模拟task
+        """
+
+        def send(self, msg):
+            print('Send msg in task: ', msg)
+
+    class DisplayMessages:
+        """
+        简单诊断类
+        以普通订阅者身份绑定来构建调试和诊断工具
+        """
+
+        def __init__(self):
+            self.counter = 0
+
+        def send(self, msg):
+            self.counter += 1
+            print('msg[%d]: %s' % (self.counter, msg))
+
+    def test_exchange(self):
+        """
+        交换机测试
+        :return:
+        """
+        task_a = ExchangeTest.Task()
+        task_b = ExchangeTest.Task()
+        task_display_msg = ExchangeTest.DisplayMessages()
+
+        exc = ExchangeTest.get_exchange('te')
+
+        threading.Thread(target=exc.attach, args=(task_a,)).start()
+        threading.Thread(target=exc.attach, args=(task_b,)).start()
+        threading.Thread(target=exc.attach, args=(task_display_msg,)).start()
+
+        exc.send('Hello ')
+        exc.send('world!')
+
+        exc.detach(task_a)
+        exc.detach(task_b)
+        exc.detach(task_display_msg)
+
+    def test_exchange_with(self):
+        """
+        交换机上下文管理器测试
+        :return:
+        """
+        task_a = ExchangeTest.Task()
+        task_b = ExchangeTest.Task()
+        task_display_msg = ExchangeTest.DisplayMessages()
+
+        exc = ExchangeTest.get_exchange('tew')
+
+        with exc.subscribe(task_a, task_b, task_display_msg):
+            exc.send('Hello')
+            exc.send('world!')
