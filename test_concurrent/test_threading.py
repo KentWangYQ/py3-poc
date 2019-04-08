@@ -1068,8 +1068,7 @@ class GeneratorTest(unittest.TestCase):
                 line = yield from GeneratorTest.read_line(client)
                 if not line or line == b'\r\n':
                     break
-                print('GOT', str(line, encoding='utf-8'))
-                line = b'Server Got:' + line
+                print('Server Got', str(line, encoding='utf-8'))
                 while line:
                     nsent = yield client.send(line)
                     line = line[nsent:]
@@ -1084,11 +1083,13 @@ class GeneratorTest(unittest.TestCase):
         GeneratorTest.EchoServer(addr, sched)
         t = threading.Thread(target=sched.run, daemon=True)
         t.start()
+        time.sleep(1)
         client = socket(AF_INET, SOCK_STREAM)
         client.connect(addr)
         client.send(b'hello\r\n')
         msg = client.recv(8192)
         print('Client got: ', msg)
+        client.close()
         sched.close()
         t.join()
     # endregion
