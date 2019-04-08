@@ -7,7 +7,7 @@ import time
 from socket import socket, AF_INET, SOCK_STREAM
 from functools import partial
 from queue import Queue
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import contextmanager
 
 
@@ -671,6 +671,7 @@ class ActorTest(unittest.TestCase):
         """
         结果对象，用于在actor中返回结果
         """
+
         def __init__(self):
             self._evt = threading.Event()
             self._result = None
@@ -687,6 +688,7 @@ class ActorTest(unittest.TestCase):
         """
         actor允许在一个工作者中运行任意的函数，并通过一个特殊的Result对象返回结果
         """
+
         def submit(self, func, *args, **kwargs):
             r = ActorTest.Result()
             self.send((func, args, kwargs, r))
@@ -821,3 +823,270 @@ class ExchangeTest(unittest.TestCase):
         with exc.subscribe(task_a, task_b, task_display_msg):
             exc.send('Hello')
             exc.send('world!')
+
+
+class GeneratorTest(unittest.TestCase):
+    """
+    使用生成器(协程)替代系统线程实现并发。又称为用户级线程或绿色线程
+    """
+
+    # region TaskScheduler Test
+    class TaskScheduler:
+        def __init__(self):
+            self._task_queue = deque()
+
+        def new_task(self, task):
+            self._task_queue.append(task)
+
+        def run(self):
+            while self._task_queue:
+                try:
+                    task = self._task_queue.popleft()
+                    next(task)
+                    self._task_queue.append(task)
+                except StopIteration:
+                    pass
+
+    @staticmethod
+    def countdown(n):
+        while n > 0:
+            print('T-minus', n)
+            yield
+            n -= 1
+
+    @staticmethod
+    def countup(n):
+        i = 0
+        while i < n:
+            print('Counting up', i)
+            yield
+            i += 1
+
+    def test_task_scheduler(self):
+        sched = GeneratorTest.TaskScheduler()
+        sched.new_task(GeneratorTest.countdown(10))
+        sched.new_task(GeneratorTest.countdown(5))
+        sched.new_task(GeneratorTest.countup(15))
+        sched.run()
+
+    # endregion
+
+    # region ActorScheduler Test
+    class ActorScheduler:
+        def __init__(self):
+            self._actors = {}
+            self._msg_queue = deque()
+
+        def new_actor(self, name, actor):
+            self._msg_queue.append((actor, None))
+            self._actors[name] = actor
+
+        def send(self, name, msg):
+            actor = self._actors.get(name)
+            if actor:
+                self._msg_queue.append((actor, msg))
+
+        def run(self):
+            while self._msg_queue:
+                actor, msg = self._msg_queue.popleft()
+                try:
+                    actor.send(msg)
+                except StopIteration:
+                    pass
+
+    @staticmethod
+    def printer():
+        while True:
+            msg = yield
+            print('Got msg: ', msg)
+
+    @staticmethod
+    def counter(sched):
+        while True:
+            n = yield
+            if n <= 0:
+                break
+
+            sched.send('printer', n)
+            sched.send('counter', n - 1)
+
+    def test_actor_scheduler(self):
+        sched = GeneratorTest.ActorScheduler()
+        sched.new_actor('printer', GeneratorTest.printer())
+        sched.new_actor('counter', GeneratorTest.counter(sched))
+        sched.send('counter', 100)
+        sched.run()
+
+    # endregion
+
+    # region 使用生成器实现并发网络应用程序
+    class YieldEvent:
+        def handle_yield(self, sched, task):
+            pass
+
+        def handle_resume(self, sched, task):
+            pass
+
+    class Scheduler:
+        def __init__(self):
+            self._sentinel = object()
+            self._tasks_num = 0
+            self._ready = deque()
+            self._read_waiting = {}
+            self._write_waiting = {}
+
+        def io_poll(self):
+            from select import select
+
+            r_set, w_set, e_set = select(self._read_waiting, self._write_waiting, [])
+
+            for r in r_set:
+                evt, task = self._read_waiting.pop(r)
+                evt.handle_resume(self, task)
+
+            for w in w_set:
+                evt, task = self._write_waiting.pop(w)
+                evt.handle_resume(self, task)
+
+        def new(self, task):
+            self.add_ready(task)
+            self._tasks_num += 1
+
+        def add_ready(self, task, msg=None):
+            self._ready.append((task, msg))
+
+        def _read_wait(self, fileno, event, task):
+            self._read_waiting[fileno] = (event, task)
+
+        def _write_wait(self, fileno, event, task):
+            self._write_waiting[fileno] = (event, task)
+
+        def run(self):
+            while True:
+                if not self._ready:
+                    self.io_poll()
+                task, msg = self._ready.popleft()
+                try:
+                    r = task.send(msg)
+                    if isinstance(r, GeneratorTest.YieldEvent):
+                        r.handle_yield(self, task)
+                    elif r == self._sentinel:
+                        print('Server closed')
+                        break
+                    else:
+                        raise RuntimeError('unrecognized yield event')
+                except StopIteration:
+                    self._tasks_num -= 1
+
+        def __close(self):
+            yield self._sentinel
+
+        def close(self):
+            self.new(self.__close())
+
+    class ReadSocket(YieldEvent):
+        def __init__(self, sock: socket, n_bytes):
+            self._sock = sock
+            self._n_bytes = n_bytes
+
+        def handle_yield(self, sched, task):
+            sched._read_wait(self._sock.fileno(), self, task)
+
+        def handle_resume(self, sched, task):
+            msg = self._sock.recv(self._n_bytes)
+            sched.add_ready(task, msg)
+
+    class WriteSocket(YieldEvent):
+        def __init__(self, sock: socket, data):
+            self._sock = sock
+            self._data = data
+
+        def handle_yield(self, sched, task):
+            sched._write_wait(self._sock.fileno(), self, task)
+
+        def handle_resume(self, sched, task):
+            nsent = self._sock.send(self._data)
+            sched.add_ready(task, nsent)
+
+    class AcceptSocket(YieldEvent):
+        def __init__(self, sock: socket):
+            self._sock = sock
+
+        def handle_yield(self, sched, task):
+            sched._read_wait(self._sock.fileno(), self, task)
+
+        def handle_resume(self, sched, task):
+            client, addr = self._sock.accept()
+            sched.add_ready(task, (client, addr))
+
+    class Socket:
+        def __init__(self, sock):
+            self._sock = sock
+
+        def recv(self, max_bytes):
+            return GeneratorTest.ReadSocket(self._sock, max_bytes)
+
+        def send(self, data):
+            return GeneratorTest.WriteSocket(self._sock, data)
+
+        def accept(self):
+            return GeneratorTest.AcceptSocket(self._sock)
+
+        def __getattr__(self, item):
+            return getattr(self._sock, item)
+
+    @staticmethod
+    def read_line(sock: socket):
+        chars = []
+        while True:
+            c = yield sock.recv(1)
+            if not c:
+                break
+            chars.append(c)
+            if c == b'\n':
+                break
+        return b''.join(chars)
+
+    class EchoServer:
+        def __init__(self, addr, sched):
+            self._addr = addr
+            self._sched = sched
+            self._sched.new(self.server_loop(addr))
+
+        def server_loop(self, addr):
+            s = GeneratorTest.Socket(socket(AF_INET, SOCK_STREAM))
+
+            s.bind(addr)
+            s.listen(5)
+
+            while True:
+                client, _ = yield s.accept()
+                self._sched.new(self.client_handler(GeneratorTest.Socket(client)))
+
+        def client_handler(self, client):
+            while True:
+                line = yield from GeneratorTest.read_line(client)
+                if not line or line == b'\r\n':
+                    break
+                print('GOT', str(line, encoding='utf-8'))
+                line = b'GOT:' + line
+                while line:
+                    nsent = yield client.send(line)
+                    line = line[nsent:]
+
+            client.close()
+            print('Client closed')
+            return
+
+    def test_scheduler(self):
+        addr = ('', 16000)
+        sched = GeneratorTest.Scheduler()
+        GeneratorTest.EchoServer(addr, sched)
+        t = threading.Thread(target=sched.run)
+        t.start()
+        client = socket(AF_INET, SOCK_STREAM)
+        client.connect(addr)
+        client.send(b'hello')
+        sched.close()
+        t.join()
+    # endregion
