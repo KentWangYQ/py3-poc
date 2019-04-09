@@ -3,6 +3,9 @@
 import unittest
 import threading
 import time
+import os
+import socket as Socket
+import select
 
 from socket import socket, AF_INET, SOCK_STREAM
 from functools import partial
@@ -928,6 +931,7 @@ class GeneratorTest(unittest.TestCase):
             为了解决这个问题，只能将操作委派给另一个可独立运行的线程或进程。
         2. 大部分Python库并不能很好的兼容基于生成器的线程。
     """
+
     class YieldEvent:
         """
         在Scheduler中作为通用yield事件
@@ -956,9 +960,8 @@ class GeneratorTest(unittest.TestCase):
             IO轮询，使用select实现IO轮询
             :return:
             """
-            from select import select
 
-            r_set, w_set, e_set = select(self._read_waiting, self._write_waiting, [])
+            r_set, w_set, e_set = select.select(self._read_waiting, self._write_waiting, [])
 
             for r in r_set:
                 # 处理read ready
@@ -1164,3 +1167,83 @@ class GeneratorTest(unittest.TestCase):
         sched.close()
         t.join()
     # endregion
+
+
+class PollableQueueTest(unittest.TestCase):
+    """
+    轮询队列
+    1. 轮询问题解决方案的一个技巧，使用一个隐藏的回路网络连接。
+        本质思想是：对每个想要轮询的队列，创建一对连接的套接字。然后向一个套接字发送代码标识数据的存在，另外一个套接字使用select()或类似的方式来轮询。
+    2. 非类文件对象的轮询，通常是比较棘手的问题，如队列。如果使用定时器，会引入其他的性能问题。
+    """
+
+    class PollableQueue(Queue):
+        """
+        可轮询队列
+        """
+
+        def __init__(self):
+            super().__init__()
+            if os.name == 'posix':
+                # 如果是posix系统，可以直接使用如下方式获取套接字对
+                self._put_sock, self._get_sock = Socket.socketpair()
+            else:
+                # 兼容non-posix系统，如Windows
+                server = socket(AF_INET, SOCK_STREAM)
+                server.bind(('127.0.0.1', 0))
+                server.listen(1)
+                self._put_sock = socket(AF_INET, SOCK_STREAM)
+                self._put_sock.connect(server.getsockname())
+                self._get_sock, _ = server.accept()
+                server.close()
+
+        def fileno(self):
+            return self._get_sock.fileno()
+
+        def put(self, item, block=True, timeout=None):
+            # 向队列加入项目后，通过put套接字发送代码x，标识有新数据加入
+            super().put(item, block, timeout)
+            self._put_sock.send(b'x')
+
+        def get(self, block=True, timeout=None):
+            # get套接字接收到字节代码后，表示有新的项目加入队列
+            self._get_sock.recv(1)
+            # 读取并返回新项目
+            return super().get(block, timeout)
+
+        def close(self):
+            # 关闭队列
+            # 关闭队列前需要关闭套接字对
+            self._get_sock.close()
+            self._put_sock.close()
+
+    @staticmethod
+    def consumer(queues):
+        while queues:
+            # 通过select来轮询加入的队列
+            can_read, _, _ = select.select(queues, [], [])
+            for r in can_read:
+                item = r.get()
+                print('Got: ', item)
+                if item == 'close':  # 接收到close，表示要关闭该队列
+                    r.close()
+                    print('Queue closed: ', r.fileno())
+                    queues.remove(r)
+
+    def test_pollable_queue(self):
+        q1 = PollableQueueTest.PollableQueue()
+        q2 = PollableQueueTest.PollableQueue()
+        q3 = PollableQueueTest.PollableQueue()
+        t = threading.Thread(target=PollableQueueTest.consumer, args=([q1, q2, q3, ],), daemon=True)
+        t.start()
+
+        q1.put(1)
+        q2.put(10)
+        q3.put('hello')
+        q2.put(15)
+
+        q1.put('close')
+        q2.put('close')
+        q3.put('close')
+
+        t.join()
