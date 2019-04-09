@@ -920,7 +920,19 @@ class GeneratorTest(unittest.TestCase):
     # endregion
 
     # region 使用生成器实现并发网络应用程序
+    """
+    生成器实现网络并发
+    1. 实现了一个小型的操作系统。有一个就绪任务队列，并且还有因I/O休眠的任务等待区，以及调度器负责在就绪队列和I/O等待区域之间调度任务。
+    2. 使用生成器编程也有很多缺点：
+        1. 无法享受到线程带来的好处，如，执行CPU依赖或I/O阻塞程序时，整个任务都会挂起，直到完成。
+            为了解决这个问题，只能将操作委派给另一个可独立运行的线程或进程。
+        2. 大部分Python库并不能很好的兼容基于生成器的线程。
+    """
     class YieldEvent:
+        """
+        在Scheduler中作为通用yield事件
+        """
+
         def handle_yield(self, sched, task):
             pass
 
@@ -928,75 +940,112 @@ class GeneratorTest(unittest.TestCase):
             pass
 
     class Scheduler:
+        """
+        Task Scheduler
+        """
+
         def __init__(self):
-            self._sentinel = object()
-            self._tasks_num = 0
-            self._ready = deque()
-            self._read_waiting = {}
-            self._write_waiting = {}
+            self._sentinel = object()  # 哨兵，用于Scheduler退出
+            self._tasks_num = 0  # 任务计数
+            self._ready = deque()  # 准备就绪的task队列
+            self._read_waiting = {}  # 等待读取IO
+            self._write_waiting = {}  # 等待写入IO
 
         def io_poll(self):
+            """
+            IO轮询，使用select实现IO轮询
+            :return:
+            """
             from select import select
 
             r_set, w_set, e_set = select(self._read_waiting, self._write_waiting, [])
 
             for r in r_set:
+                # 处理read ready
                 evt, task = self._read_waiting.pop(r)
                 evt.handle_resume(self, task)
 
             for w in w_set:
+                # 处理write ready
                 evt, task = self._write_waiting.pop(w)
                 evt.handle_resume(self, task)
 
         def new(self, task):
+            # 新建任务
             self.add_ready(task)
             self._tasks_num += 1
 
         def add_ready(self, task, msg=None):
+            # 向ready队列添加项目
             self._ready.append((task, msg))
 
         def _read_wait(self, fileno, event, task):
+            # 向等待读取集合注册项目
             self._read_waiting[fileno] = (event, task)
 
         def _write_wait(self, fileno, event, task):
+            # 向等待写入集合注册项目
             self._write_waiting[fileno] = (event, task)
 
         def run(self):
+            """
+            Scheduler运行
+
+            :return:
+            """
             while True:
                 if not self._ready:
+                    # 如果没有ready task，执行IO轮询
                     self.io_poll()
+                # 从ready队列中弹出一个任务
                 task, msg = self._ready.popleft()
                 try:
-                    r = task.send(msg)
+                    r = task.send(msg)  # 执行任务
                     if isinstance(r, GeneratorTest.YieldEvent):
+                        # 如果返回的是Yield事件，按照预先定义的方式处理yield
                         r.handle_yield(self, task)
                     elif r == self._sentinel:
+                        # 如果返回的是哨兵，关闭Scheduler
                         print('Server closed')
                         break
                     else:
+                        # 如果返回的是其他对象，抛错
                         raise RuntimeError('unrecognized yield event')
                 except StopIteration:
+                    # 协程结束迭代，task完成
                     self._tasks_num -= 1
 
         def __close(self):
+            # 通过发送哨兵通知Scheduler关闭
             yield self._sentinel
 
         def close(self):
+            # 关闭Scheduler
             self.new(self.__close())
 
     class ReadSocket(YieldEvent):
+        """
+        读取Socket事件，用于网络IO Socket
+        """
+
         def __init__(self, sock: socket, n_bytes):
-            self._sock = sock
-            self._n_bytes = n_bytes
+            self._sock = sock  # 网络Socket
+            self._n_bytes = n_bytes  # 每次发送最大字节数
 
         def handle_yield(self, sched, task):
+            # 处理yield，将task注册进Scheduler的等待读取集合
             sched._read_wait(self._sock.fileno(), self, task)
 
         def handle_resume(self, sched, task):
+            # 处理读取等待恢复，读取消息，并将task注册进Scheduler的ready队列
             msg = self._sock.recv(self._n_bytes)
             sched.add_ready(task, msg)
 
     class WriteSocket(YieldEvent):
+        """
+        写入Socket事件，用于网络IO Socket
+        """
+
         def __init__(self, sock: socket, data):
             self._sock = sock
             self._data = data
@@ -1009,6 +1058,10 @@ class GeneratorTest(unittest.TestCase):
             sched.add_ready(task, nsent)
 
     class AcceptSocket(YieldEvent):
+        """
+        Socket接受连接事件，用于网络IO Socket
+        """
+
         def __init__(self, sock: socket):
             self._sock = sock
 
@@ -1020,6 +1073,10 @@ class GeneratorTest(unittest.TestCase):
             sched.add_ready(task, (client, addr))
 
     class Socket:
+        """
+        协程实现网络Socket
+        """
+
         def __init__(self, sock):
             self._sock = sock
 
@@ -1037,6 +1094,11 @@ class GeneratorTest(unittest.TestCase):
 
     @staticmethod
     def read_line(sock: socket):
+        """
+        从socket读取一行数据
+        :param sock:
+        :return:
+        """
         chars = []
         while True:
             c = yield sock.recv(1)
@@ -1048,34 +1110,42 @@ class GeneratorTest(unittest.TestCase):
         return b''.join(chars)
 
     class EchoServer:
+        """
+        echo server，模拟网络服务器
+        """
+
         def __init__(self, addr, sched):
             self._addr = addr
             self._sched = sched
-            self._sched.new(self.server_loop(addr))
+            self._sched.new(self.server_loop(addr))  # 向Scheduler注册echo server循环
 
         def server_loop(self, addr):
+            # 处理网络连接
             s = GeneratorTest.Socket(socket(AF_INET, SOCK_STREAM))
 
             s.bind(addr)
             s.listen(5)
 
             while True:
+                # 接收客户端连接，并向Scheduler注册客户端消息处理器
                 client, _ = yield s.accept()
                 self._sched.new(self.client_handler(GeneratorTest.Socket(client)))
 
         def client_handler(self, client):
+            # 处理客户端消息
             while True:
-                line = yield from GeneratorTest.read_line(client)
+                line = yield from GeneratorTest.read_line(client)  # 从客户端读取一行数据
                 if not line or line == b'\r\n':
+                    # 如果客户端发送空行或回车，触发客户端关闭连接
                     break
                 print('Server Got', str(line, encoding='utf-8'))
                 while line:
+                    # 向客户端会写消息
                     nsent = yield client.send(line)
                     line = line[nsent:]
 
-            client.close()
+            client.close()  # 关闭连接
             print('Client closed')
-            return
 
     def test_scheduler(self):
         addr = ('', 16000)
@@ -1088,6 +1158,7 @@ class GeneratorTest(unittest.TestCase):
         client.connect(addr)
         client.send(b'hello\r\n')
         msg = client.recv(8192)
+        client.send(b'\r\n')
         print('Client got: ', msg)
         client.close()
         sched.close()
