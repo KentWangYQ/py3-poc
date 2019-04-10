@@ -1096,7 +1096,7 @@ class GeneratorTest(unittest.TestCase):
             return getattr(self._sock, item)
 
     @staticmethod
-    def read_line(sock: socket):
+    def read_line(sock: Socket):
         """
         从socket读取一行数据
         :param sock:
