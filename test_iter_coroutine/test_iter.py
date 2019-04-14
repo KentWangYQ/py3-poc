@@ -3,6 +3,8 @@
 import unittest
 import itertools
 
+from collections import Iterable
+
 
 class IterTest(unittest.TestCase):
     class Node:
@@ -178,3 +180,22 @@ class IterTest(unittest.TestCase):
         a = ['a', 'b', 'c']
         for p in itertools.combinations_with_replacement(a, 3):
             print(p)
+
+    @staticmethod
+    def flatten(items, igonre_types=(str, bytes)):
+        for i in items:
+            if isinstance(i, Iterable) and not isinstance(i, igonre_types):
+                yield from IterTest.flatten(i)
+            else:
+                yield i
+
+    def test_flatten(self):
+        items = [1, 2, [3, 4, [5, 6], 7], 8]
+
+        for i in IterTest.flatten(items):
+            print(i)
+
+    def test_iter_instead_for(self):
+        it = IterTest.flatten([1, 2, [3, 4, [5, 6], 7], 0])
+        for i in iter(lambda: next(it), 0):
+            print(i)
