@@ -17,12 +17,12 @@ class MotorTest(unittest.TestCase):
         collection = db['test']
 
         async def do_find_one():
-            c = collection.find_one({'_id': ObjectId('5bf27c99c370b9f37d370000')})
+            c = collection.find_one({'_id': ObjectId('5bf27c99c370b9f37d370000')}, {'_id': 1})
             document = await c
             print(document)
 
         async def do_find():
-            async for document in collection.find({'keyword': 'name'}):
+            async for document in collection.find({'keyword': 'name'}, {'_id': 1}):
                 print(document)
 
         async def main():
