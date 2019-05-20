@@ -1,5 +1,7 @@
 import unittest
 import numpy as np
+from matplotlib.pylab import plt
+from mpl_toolkits.mplot3d import Axes3D as _3d
 
 
 def mean_squared_error(y, t):
@@ -33,3 +35,51 @@ class LearningTest(unittest.TestCase):
 
         y = [.1, .05, .1, .0, .05, .1, .0, .6, 0, .0]
         print(cross_entropy_error(np.array(y), np.array(t)))
+
+
+class NumericalDifferentiationTest(unittest.TestCase):
+    def numerical_diff(self, f, x):
+        h = 1e-4
+        return (f(x + h) - f(x - h)) / (2 * h)
+
+    def function_1(self, x):
+        return .01 * x ** 2 + .1 * x
+
+    def test_numerical_diff(self):
+        x = np.arange(.0, 20.0, .1)
+        y = self.function_1(x)
+        plt.xlabel('x')
+        plt.ylabel('f(x)')
+        plt.plot(x, y)
+        plt.show()
+
+        print(self.numerical_diff(self.function_1, 5))
+        print(self.numerical_diff(self.function_1, 10))
+
+    def function_2(self, x, y):
+        return x ** 2 + y ** 2
+
+    def test_function_2(self):
+        fig = plt.figure()
+        ax = _3d(fig)
+        x = np.arange(-3.0, 3.0, .1)
+        y = np.arange(-3.0, 3.0, .1)
+        x, y = np.meshgrid(x, y)
+        z = self.function_2(x, y)
+        ax.plot_surface(x, y, z,
+                        rstride=1,
+                        cstride=1,
+                        cmap='rainbow'
+                        )
+        plt.show()
+
+    def function_tmp1(self, x0):
+        return x0 * x0 + 4.0 ** 2.0
+
+    def function_tmp2(self, x1):
+        return 3.0 ** 2.0 + x1 * x1
+
+    def test_tmp(self):
+        x, y = 3.0, 4.0
+        print(self.numerical_diff(self.function_tmp1, x))
+        print(self.numerical_diff(self.function_tmp2, y))
