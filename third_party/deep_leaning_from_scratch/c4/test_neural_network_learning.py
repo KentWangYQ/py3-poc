@@ -83,3 +83,101 @@ class NumericalDifferentiationTest(unittest.TestCase):
         x, y = 3.0, 4.0
         print(self.numerical_diff(self.function_tmp1, x))
         print(self.numerical_diff(self.function_tmp2, y))
+
+
+class GradientTest(unittest.TestCase):
+    def function_2(self, x):
+        if x.ndim == 1:
+            return np.sum(x ** 2)
+        else:
+            return np.sum(x ** 2, axis=1)
+
+    def _numerical_gradient_no_batch(self, f, x):
+        h = 1e-4
+        grad = np.zeros_like(x)
+
+        for idx in range(x.size):
+            tmp_val = x[idx]
+            x[idx] = tmp_val + h
+            fxh1 = f(x)
+
+            x[idx] = tmp_val - h
+            fxh2 = f(x)
+
+            grad[idx] = (fxh1 - fxh2) / (2 * h)
+            x[idx] = tmp_val
+
+        return grad
+
+    def numerical_gradient(self, f, x):
+        if x.ndim == 1:
+            return self._numerical_gradient_no_batch(f, x)
+        else:
+            grad = np.zeros_like(x)
+
+            for idx, x in enumerate(x):
+                grad[idx] = self._numerical_gradient_no_batch(f, x)
+
+            return grad
+
+    def tangent_line(self, f, x):
+        d = self.numerical_gradient(f, x)
+        print(d)
+        y = f(x) - d * x
+        return lambda t: d * t + y
+
+    def test_numerical_gradient(self):
+        print(self.numerical_gradient(self.function_2, np.array([3.0, 4.0])))
+        print(self.numerical_gradient(self.function_2, np.array([.0, 2.0])))
+        print(self.numerical_gradient(self.function_2, np.array([3.0, .0])))
+
+    def test_ng_2d(self):
+        x0 = np.arange(-2, 2.5, .25)
+        x1 = np.arange(-2, 2.5, .25)
+        x, y = np.meshgrid(x0, x1)
+
+        x = x.flatten()
+        y = y.flatten()
+
+        grad = self.numerical_gradient(self.function_2, np.array([x, y]))
+
+        plt.figure()
+        plt.quiver(x, y, -grad[0], -grad[1], angles='xy', color='#666666')
+        plt.xlim([-2, 2])
+        plt.ylim([-2, 2])
+        plt.xlabel('x0')
+        plt.ylabel('x1')
+        plt.grid()
+        plt.legend()
+        plt.draw()
+        plt.show()
+
+    def gradient_descent(self, f, init_x, lr=.01, step_num=100):
+        """梯度下降法"""
+        x = init_x
+        x_history = []
+
+        for i in range(step_num):
+            x_history.append(x.copy())
+
+            grad = self.numerical_gradient(f, x)
+            x -= lr * grad
+
+        return x, np.array(x_history)
+
+    def test_gradient_descent(self):
+        init_x = np.array([-3.0, 4.0])
+
+        lr = 0.1
+        step_num = 20
+        x, x_history = self.gradient_descent(self.function_2, init_x, lr=lr, step_num=step_num)
+
+        plt.plot([-5, 5], [0, 0], '--b')
+        plt.plot([0, 0], [-5, 5], '--b')
+        plt.plot(x_history[:, 0], x_history[:, 1], 'o')
+
+        plt.xlim(-3.5, 3.5)
+        plt.ylim(-4.5, 4.5)
+        plt.xlabel('X0')
+        plt.ylabel('X1')
+        plt.show()
