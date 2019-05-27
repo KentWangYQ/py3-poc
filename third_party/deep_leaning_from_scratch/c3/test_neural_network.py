@@ -147,7 +147,7 @@ class MultidimensionalArrayTest(unittest.TestCase):
         print(self.softmax_improve(a))
 
 
-from third_party.deep_leaning_from_scratch.dataset.mnist import load_mnist
+from deep_learning_from_scratch.dataset.mnist import load_mnist
 from PIL import Image
 import pickle
 

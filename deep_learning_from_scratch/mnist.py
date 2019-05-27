@@ -1,13 +1,26 @@
+import math
+from PIL import Image
 from .dataset.mnist import *
 from .common import *
 from .neural_network import ThreeLayerNeuralNetwork
 
 
 class MNIST:
+    def show_imgs(self, imgs):
+        row = min(40, imgs.shape[0])
+        colume = math.ceil(len(imgs) / row)
+        imgs = imgs.reshape(colume, row, 28, 28)
+        hs_img = np.vstack(np.hstack(c for c in r) for r in imgs)
+        pil_img = Image.fromarray(np.uint8(hs_img))
+        pil_img.show()
+
     def init_network(self):
         with open(dataset_dir + '/sample_weight.pkl', 'rb') as f:
             network = pickle.load(f)
         return network
+
+    def load_data(self, normalize=True, flatten=True, one_hot_label=False):
+        return load_mnist(normalize, flatten, one_hot_label)
 
     def test(self):
         """
