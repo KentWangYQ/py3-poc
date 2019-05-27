@@ -111,15 +111,63 @@ def cross_entropy_error_mini_batch(y, t):
 
 # endregion
 
-
 # region 数值微分(numerical differentiation)
 def numerical_diff(f, x):
     """
-    数值微分
+    导数计算
     :param f:
     :param x:
     :return:
     """
     h = 1e-4  # 不能使用太小的数值，否则会产生舍入误差(rounding error)
     return (f(x + h) - f(x - h)) / (2 * h)
+
+
+def numerical_gradient(f, x):
+    """
+    梯度计算
+    :param f:
+    :param x:
+    :return:
+    """
+
+    def _ng(f, x):
+        h = 1e-4
+        grad = np.zeros_like(x)  # 生成和x形状相同的数组
+
+        for idx in range(x.size):
+            tmp_val = x[idx]
+            # f(x+h)的计算
+            x[idx] = tmp_val + h
+            fxh1 = f(x)
+
+            # f(x-h)的计算
+            x[idx] = tmp_val - h
+            fxh2 = f(x)
+
+            grad[idx] = (fxh1 - fxh2) / (2 * h)
+            x[idx] = tmp_val  # 还原值
+
+        return grad
+
+    if x.ndim == 1:
+        return _ng(f, x)
+    else:
+        grad = np.zeros_like(x)
+
+        for idx, x in enumerate(x):
+            grad[idx] = _ng(f, x)
+
+        return grad
+
+
+# endregion
+
+# region functions
+def function_2(x):
+    # return x ** 2 + y ** 2
+    if x.ndim == 1:
+        return np.sum(x ** 2)
+    else:
+        return np.sum(x ** 2, axis=1)
 # endregion
